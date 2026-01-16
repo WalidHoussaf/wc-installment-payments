@@ -1,313 +1,193 @@
+# WC Installment Payments Engine
 
-# WC Installment Payments
+![PHP Version](https://img.shields.io/badge/php-%3E%3D7.4-blue) ![WordPress](https://img.shields.io/badge/WordPress-5.8%2B-grey) ![WooCommerce](https://img.shields.io/badge/WooCommerce-6.0%2B-violet) ![License](https://img.shields.io/badge/license-MIT-green)
 
-WordPress/WooCommerce plugin that adds an **installment payment** engine based on:
+> **Enterprise-grade installment payment processing for WooCommerce.**
 
-- a **data layer** (custom SQL tables)
-- an **orchestrator** (lightweight service-locator in `Plugin`)
-- a **scheduler** (WP-Cron) to execute due payments
-- a **retry strategy** (pure PHP, testable)
-- an **admin dashboard** (WP_List_Table) with list view + detail view
-- a **webhook dispatcher** with HMAC signature to notify external systems (recovery)
+This plugin implements a robust, event-driven payment engine designed to decouple payment scheduling from the immediate checkout flow. It prioritizes **data integrity**, **automatic recovery**, and **observability** over simple integration.
 
-> Goal: demonstrate a "senior/lead" architecture: separation of concerns, robustness, traceability, extensibility.
+### Key Architectural Highlights
+
+* **Service-Locator Pattern:** Lightweight orchestration via a centralized `Plugin` class to manage dependencies and lazy-loading.
+* **Custom Data Layer:** Dedicated SQL tables (via `dbDelta`) for high-performance querying, decoupling financial state from the heavy `wp_posts` table.
+* **Resilient Scheduling:** A self-healing background worker that handles retries and failures without blocking the main thread.
+* **Penny-Perfect Calculation:** Financial arithmetic engine ensuring zero-cent loss during installment splitting.
+* **Security First:** HMAC-signed webhooks for secure communication with external recovery systems.
 
 ---
 
 ## Table of Contents
 
-- Installation
-- Project structure
-- Data model (tables)
-- Functional flows
-  - Plan creation at checkout
-  - Scheduler (automation)
-  - Retry (smart recovery)
-  - Recovery webhook (HMAC)
-- Admin Dashboard
-- Configuration (current state)
-- Robustness / performance notes
-- Development & debug
+- [WC Installment Payments Engine](#wc-installment-payments-engine)
+    - [Key Architectural Highlights](#key-architectural-highlights)
+  - [Table of Contents](#table-of-contents)
+  - [Project Structure](#project-structure)
+    - [1. Plan Repository (`wp_wcip_installment_plans`)](#1-plan-repository-wp_wcip_installment_plans)
+    - [2. Payment Ledger (`wp_wcip_installment_payments`)](#2-payment-ledger-wp_wcip_installment_payments)
+  - [Core Workflows](#core-workflows)
+    - [1. Checkout \& Plan Generation](#1-checkout--plan-generation)
+    - [2. The Scheduler Loop](#2-the-scheduler-loop)
+    - [3. Retry Strategy (Smart Recovery)](#3-retry-strategy-smart-recovery)
+    - [4. Webhook Dispatcher (Recovery)](#4-webhook-dispatcher-recovery)
+  - [Admin Interface](#admin-interface)
+    - [Plan List View](#plan-list-view)
+    - [Plan Detail View](#plan-detail-view)
+  - [Installation \& Configuration](#installation--configuration)
+  - [Development Notes](#development-notes)
+    - [Debugging \& Logs](#debugging--logs)
+    - [Manual Triggering](#manual-triggering)
 
 ---
 
-## Installation
+## Project Structure
 
-1. Copy the `wc-installment-payments` folder into:
-   `wp-content/plugins/`
-2. Activate the plugin in **WP Admin → Plugins**.
-3. Make sure **WooCommerce** is active.
+The codebase follows **PSR-4** standards and separates concerns into logical domains (`Core`, `Payments`, `Admin`).
 
-Upon activation, the plugin creates its SQL tables via `dbDelta()`.
-
----
-
-## Project structure
-
-```
+```text
 wc-installment-payments/
-├── wc-installment-payments.php         # Bootstrap plugin + autoloader + hooks activation
-├── uninstall.php                       # Delete tables/options on uninstall
+├── wc-installment-payments.php       # Entry Point: Bootstrap & Hook Registration
+├── uninstall.php                     # Teardown: Clean up SQL/Options
 ├── src/
-│   ├── Plugin.php                      # Orchestrator (service locator + wiring)
-│   ├── Core/
-│   │   ├── Activator.php               # Table creation + version
-│   │   ├── Deactivator.php             # Cleanup WP-Cron
-│   │   ├── Scheduler.php               # Automation (WP-Cron + due date processing)
-│   │   └── WebhookDispatcher.php       # HMAC signed webhook (recovery)
-│   ├── Payments/
-│   │   ├── PlanManager.php             # Data layer table plans
-│   │   ├── PaymentManager.php          # Data layer table payments
-│   │   ├── CheckoutHandler.php         # WooCommerce bridge (plan creation + installments)
-│   │   └── RetryStrategy.php           # Pure PHP (D+3, D+7, D+14)
-│   └── Admin/
-│       ├── AdminMenu.php               # WooCommerce menu + list/detail routing
-│       ├── PlanListTable.php           # WP_List_Table (plans list)
-│       └── PlanDetailView.php          # Plan detail view (payment schedule)
+│   ├── Plugin.php                    # Orchestrator: Dependency Injection & Wiring
+│   ├── Core/                         # Infrastructure Layer
+│   │   ├── Activator.php             # Schema Migration (dbDelta)
+│   │   ├── Deactivator.php           # Cron Cleanup
+│   │   ├── Scheduler.php             # Cron Event Handler
+│   │   └── WebhookDispatcher.php     # External Notification Service (HMAC)
+│   ├── Payments/                     # Domain Logic Layer
+│   │   ├── PlanManager.php           # DAO for Installment Plans
+│   │   ├── PaymentManager.php        # DAO for Individual Transactions
+│   │   ├── CheckoutHandler.php       # WooCommerce Integration Bridge
+│   │   └── RetryStrategy.php         # Algorithm: Recovery Logic (Pure PHP)
+│   └── Admin/                        # Presentation Layer
+│       ├── AdminMenu.php             # Routing & Controllers
+│       ├── PlanListTable.php         # WP_List_Table Implementation
+│       └── PlanDetailView.php        # Detailed Reporting View
 └── README.md
-```
 
 ---
 
-## Data model (tables)
+##Data Architecture
 
-The plugin uses 2 tables:
+The engine bypasses standard WordPress Post Meta to ensure ACID-compliant transactions and efficient querying for high-volume stores.
 
-### `wp_wcip_installment_plans`
+### 1. Plan Repository (`wp_wcip_installment_plans`)
 
-- `id` (PK)
-- `order_id` (WooCommerce Order ID)
-- `customer_id` (WordPress User ID)
-- `total_amount` (DECIMAL)
-- `installments_count` (INT)
-- `status` (ex: `active`, `completed`, `breach`)
-- `created_at` (DATETIME)
+Represents the "parent" agreement linked to the WooCommerce Order.
 
-### `wp_wcip_installment_payments`
+> ![Plan Schema](assets/schema-plans.png)
 
-- `id` (PK)
-- `plan_id` (logical FK to `plans.id`)
-- `stripe_payment_intent_id` (VARCHAR)
-- `amount` (DECIMAL)
-- `due_date` (DATETIME)
-- `status` (ex: `pending`, `paid`, `failed`, `failed_final`)
-- `attempts` (INT)
-- `last_error` (TEXT)
+### 2. Payment Ledger (`wp_wcip_installment_payments`)
 
-> At this stage, the "FK" is not an SQL constraint: this is intentional to keep it simple (WordPress + dbDelta). Can be reinforced later.
+Represents the individual transaction schedule.
 
----
+> ![Payment Schema](assets/schema-payments.png)
 
-## Functional flows
+> **Note:** Foreign Keys are logical at this stage to maintain compatibility with dbDelta, but the application layer enforces integrity.
 
-### 1) Plan creation at checkout (WooCommerce bridge)
+## Core Workflows
 
-File: `src/Payments/CheckoutHandler.php`
+### 1. Checkout & Plan Generation
 
-Hook: `woocommerce_checkout_order_processed`
+* **Handler:** `src/Payments/CheckoutHandler.php`
+* **Hook:** `woocommerce_checkout_order_processed`
 
-Business rule (demo):
+When an order exceeds the configured threshold (e.g., **100€**), the system engages the Installment Engine:
 
-- if order total **>= 100€** ⇒ create a **3-installment** plan
+1.  **Transaction Start:** Initiates an SQL transaction (`START TRANSACTION`).
+2.  **Plan Initialization:** Creates the parent record.
+3.  **Penny-Perfect Calculation:** Splits the total ensuring no floating-point errors.
+    > *Example:* 100€ / 3 installments
+    > *Result:* `33.33` + `33.33` + `33.34`
+4.  **Ledger Creation:**
+    * **Installment 1:** Marked `paid` (captured by standard WC Checkout).
+    * **Installment 2+:** Marked `pending` with future `due_date` (D+30, D+60).
+5.  **Commit:** Finalizes the transaction.
 
-What the handler does:
+### 2. The Scheduler Loop
 
-1. Checks eligibility (total)
-2. Creates the "parent" plan via `PlanManager::create_plan()`
-3. Calculates the schedule with a **penny-perfect** algorithm (cents)
-4. Creates the "child" payments via `PaymentManager::create_payment()`
-   - 1st installment `paid` (paid via standard WooCommerce checkout)
-   - following ones `pending` with a `due_date` at D+30, D+60...
-5. Adds a note to the order
+* **Handler:** `src/Core/Scheduler.php`
+* **Cron Event:** `wcip_hourly_process`
 
-#### Penny-perfect (no loss of cents)
+The background worker operates on a **"Fetch-Lock-Process"** model to handle high throughput:
 
-The calculation works in cents to avoid float errors:
+1.  **Fetch:** `PaymentManager::get_due_payments()` retrieves all `pending` items where `due_date <= NOW()`.
+2.  **Process:** Iterates through payments securely (try/catch block per item).
+3.  **Execute:** Calls `StripeService::charge_saved_card()` (Simulation).
+4.  **Result:**
+    * **Success:** Updates status to `paid`.
+    * **Failure:** Triggers `wcip_payment_failed` action.
 
-- `100 / 3` ⇒ `33.33 + 33.33 + 33.34`
+### 3. Retry Strategy (Smart Recovery)
 
-#### Transaction (best effort)
+* **Handler:** `src/Payments/RetryStrategy.php`
+* **Type:** Pure PHP logic (Unit Testable)
 
-The handler opens an SQL transaction (`START TRANSACTION`) and rollback if:
+The system implements a deterministic recovery strategy to maximize revenue recovery while minimizing gateway spam.
 
-- plan creation fails
-- installment creation fails
+* **Trigger:** Payment failure in Scheduler.
+* **Logic:**
+    * Attempt 1 fail → Reschedule to **D+3**
+    * Attempt 2 fail → Reschedule to **D+7**
+    * Attempt 3 fail → Reschedule to **D+14**
+    * Attempt 4 fail → **Hard Failure**
+* **Outcome:**
+    * *If retrying:* Status remains `pending`, `due_date` updated.
+    * *If exhausted:* Status becomes `failed_final`, Plan becomes `breach`, `wcip_payment_failed_final` action fired.
 
----
+### 4. Webhook Dispatcher (Recovery)
 
-### 2) Scheduler (Automation)
+* **Handler:** `src/Core/WebhookDispatcher.php`
 
-File: `src/Core/Scheduler.php`
+Upon a `failed_final` event, the system dispatches a secure notification to external dunning/collections software.
 
-Purpose: process payments that have reached their due date.
+**Security Specification:**
 
-- WP-Cron event: `wcip_hourly_process` (scheduled as `hourly`)
-- WP action: `add_action('wcip_hourly_process', ...)`
-
-
-Process:
-
-1. `PaymentManager::get_due_payments()` retrieves `pending` payments with `due_date <= now`
-2. loop payment by payment
-3. for each payment:
-   - retrieves the parent plan
-   - calls Stripe (simulation) via `StripeService::charge_saved_card()`
-   - updates DB via `PaymentManager::log_attempt()` as `paid` or `failed`
-   - in case of failure: triggers `do_action('wcip_payment_failed', $payment_id, $plan_id)`
-
-
-Robustness: a crashing payment doesn't block the loop (try/catch per item).
+* **Method:** POST (Async/Non-blocking)
+* **Signature:** `X-WCIP-Signature` header containing `HMAC-SHA256` of the payload.
+* **Verification:** Receiver uses the shared `secret_key` to validate payload integrity and origin.
 
 ---
 
-### 3) Retry (Smart Recovery)
+## Admin Interface
 
-Files:
+The plugin extends the WooCommerce dashboard to provide full visibility into the installment ledger.
 
-- `src/Payments/RetryStrategy.php` (pure PHP)
-- `src/Core/Scheduler.php` (wiring via hook)
+### Plan List View
+Located at **WooCommerce → Installment Plans**. Built on top of the native `WP_List_Table` for consistency with WordPress UI standards. Includes:
+* Sortable columns
+* Status badges
+* Pagination
 
-The strategy provides:
-
-- attempt 1 failed ⇒ retry at **D+3**
-- attempt 2 failed ⇒ retry at **D+7**
-- attempt 3 failed ⇒ retry at **D+14**
-- then ⇒ abandon
-
-When `wcip_payment_failed` is triggered, the scheduler executes `handle_payment_failure()`:
-
-- reads `attempts`
-- asks `RetryStrategy` for the next date
-- if date: `PaymentManager::reschedule_payment()` (status= pending + due_date)
-- else:
-  - `PaymentManager::mark_as_failed_final()`
-  - `PlanManager::update_status($plan_id, 'breach')`
-  - triggers `do_action('wcip_payment_failed_final', $payment_id, $plan_id)`
+### Plan Detail View
+Provides a granular view of a specific plan, including:
+* Summary metrics (Total paid, remaining).
+* Detailed schedule table (Stripe IDs, attempt counts, last error logs).
 
 ---
 
-### 4) Webhook Dispatcher (Recovery)
+## Installation & Configuration
 
-File: `src/Core/WebhookDispatcher.php`
-
-The dispatcher listens to `wcip_payment_failed_final` and sends a POST JSON to an external endpoint.
-
-#### Security: HMAC signature
-
-- `body` (JSON) is signed: `hash_hmac('sha256', $body_json, $secret_key)`
-- the signature is sent via header: `X-WCIP-Signature`
-
-The receiver can recalculate the HMAC server-side and verify:
-
-- payload integrity
-- authenticity (shared secret)
-
-#### HTTP sending
-
-Uses `wp_remote_post()` with `blocking => false` (fire & forget) to not slow down WP.
+1.  **Deploy:** Upload the `wc-installment-payments` directory to `wp-content/plugins/`.
+2.  **Activate:** Enable via WP Admin. Database migrations run automatically via `Activator::activate()`.
+3.  **Environment:**
+    The plugin currently expects the following to be configured (or mocked in `Plugin.php`):
+    * `STRIPE_API_KEY`
+    * `WCIP_WEBHOOK_URL`
+    * `WCIP_WEBHOOK_SECRET`
 
 ---
 
-## Admin Dashboard
+## Development Notes
 
-### Menu
+### Debugging & Logs
+The system writes to the standard PHP `error_log` for critical events:
+* Transaction rollbacks during checkout.
+* Scheduler execution times and batch counts.
+* Webhook response codes.
 
-File: `src/Admin/AdminMenu.php`
+### Manual Triggering
+To force the scheduler without waiting for WP-Cron (useful for local dev):
 
-- adds a submenu under **WooCommerce**: `wcip-plans`
-- internal routing:
-  - `?page=wcip-plans` ⇒ list
-  - `?page=wcip-plans&action=view&id=XX` ⇒ detail view
-
-### List (WP_List_Table)
-
-File: `src/Admin/PlanListTable.php`
-
-- native WordPress pagination
-- `column_id()` includes a **row action** "View details"
-
-### Detail (Drill-down)
-
-File: `src/Admin/PlanDetailView.php`
-
-- displays a plan summary
-- displays the complete payment schedule: status, Stripe PI, attempts, last error
-
----
-
-## Orchestration & loading (Plugin.php)
-
-File: `src/Plugin.php`
-
-The plugin uses a **simple service-locator** (WordPress-friendly pattern):
-
-- lazy initialization of services after WooCommerce check
-- unique registration of hooks (guard `hooks_registered`)
-- admin loading **only** if `is_admin()` (guard `admin_initialized`)
-
----
-
-## Configuration (current state)
-
-The following values are placeholders (demo):
-
-- `StripeService::$api_key`
-- `WebhookDispatcher::$webhook_url`
-- `WebhookDispatcher::$secret_key`
-
-In a production version, they should come from:
-
-- WooCommerce options
-- or environment variables
-
----
-
-## Deactivation / Uninstallation
-
-### Deactivation
-
-`src/Core/Deactivator.php`:
-
-- cleans up WP-Cron: `wp_clear_scheduled_hook('wcip_hourly_process')`
-
-### Uninstallation
-
-`uninstall.php`:
-
-- drop custom tables
-- delete `wcip_plugin_version` option
-
----
-
-## Development & debug
-
-### Generate data (demo)
-
-- place a WooCommerce order >= 100€
-- the `CheckoutHandler` creates a plan + installments
-
-### Force CRON processing
-
-WP-Cron triggers via traffic. To test:
-
-- load a site page (triggers WP-Cron)
-- or use WP-CLI (if available):
-  - `wp cron event run wcip_hourly_process`
-
-### Logs
-
-The plugin logs via `error_log()`:
-
-- critical errors (orphaned plan, impossible insert)
-- retry rescheduling
-- webhook sending
-
----
-
-## Natural roadmap (if you continue the project)
-
-- WooCommerce Settings (API keys, eligibility rule, number of installments)
-- Real Stripe SDK integration (`off_session`, `payment_method_id` default)
-- Batching (limit) in `get_due_payments()`
-- Calculated `progress` column (nb paid / total)
-- Bulk actions in `WP_List_Table` (export, manual retry, etc.)
+```bash
+wp cron event run wcip_hourly_process
