@@ -22,20 +22,22 @@ This plugin implements a robust, event-driven payment engine designed to decoupl
     - [Key Architectural Highlights](#key-architectural-highlights)
   - [Table of Contents](#table-of-contents)
   - [Project Structure](#project-structure)
-    - [1. Plan Repository (`wp_wcip_installment_plans`)](#1-plan-repository-wp_wcip_installment_plans)
-    - [2. Payment Ledger (`wp_wcip_installment_payments`)](#2-payment-ledger-wp_wcip_installment_payments)
+  - [Data Architecture](#data-architecture)
+    - [Plan Repository (`wp_wcip_installment_plans`)](#plan-repository-wp_wcip_installment_plans)
+    - [Payment Ledger (`wp_wcip_installment_payments`)](#payment-ledger-wp_wcip_installment_payments)
   - [Core Workflows](#core-workflows)
     - [1. Checkout \& Plan Generation](#1-checkout--plan-generation)
     - [2. The Scheduler Loop](#2-the-scheduler-loop)
     - [3. Retry Strategy (Smart Recovery)](#3-retry-strategy-smart-recovery)
     - [4. Webhook Dispatcher (Recovery)](#4-webhook-dispatcher-recovery)
-  - [Admin Interface](#admin-interface)
+    - [Admin Interface](#admin-interface)
     - [Plan List View](#plan-list-view)
     - [Plan Detail View](#plan-detail-view)
   - [Installation \& Configuration](#installation--configuration)
   - [Development Notes](#development-notes)
     - [Debugging \& Logs](#debugging--logs)
     - [Manual Triggering](#manual-triggering)
+  - [Future Roadmap](#future-roadmap)
 
 ---
 
@@ -64,20 +66,18 @@ wc-installment-payments/
 │       ├── PlanListTable.php         # WP_List_Table Implementation
 │       └── PlanDetailView.php        # Detailed Reporting View
 └── README.md
-
----
-
-##Data Architecture
+```
+## Data Architecture
 
 The engine bypasses standard WordPress Post Meta to ensure ACID-compliant transactions and efficient querying for high-volume stores.
 
-### 1. Plan Repository (`wp_wcip_installment_plans`)
+### Plan Repository (`wp_wcip_installment_plans`)
 
 Represents the "parent" agreement linked to the WooCommerce Order.
 
 > ![Plan Schema](assets/schema-plans.png)
 
-### 2. Payment Ledger (`wp_wcip_installment_payments`)
+### Payment Ledger (`wp_wcip_installment_payments`)
 
 Represents the individual transaction schedule.
 
@@ -147,19 +147,19 @@ Upon a `failed_final` event, the system dispatches a secure notification to exte
 * **Signature:** `X-WCIP-Signature` header containing `HMAC-SHA256` of the payload.
 * **Verification:** Receiver uses the shared `secret_key` to validate payload integrity and origin.
 
----
-
-## Admin Interface
+### Admin Interface
 
 The plugin extends the WooCommerce dashboard to provide full visibility into the installment ledger.
 
 ### Plan List View
+
 Located at **WooCommerce → Installment Plans**. Built on top of the native `WP_List_Table` for consistency with WordPress UI standards. Includes:
 * Sortable columns
 * Status badges
 * Pagination
 
 ### Plan Detail View
+
 Provides a granular view of a specific plan, including:
 * Summary metrics (Total paid, remaining).
 * Detailed schedule table (Stripe IDs, attempt counts, last error logs).
@@ -191,3 +191,13 @@ To force the scheduler without waiting for WP-Cron (useful for local dev):
 
 ```bash
 wp cron event run wcip_hourly_process
+```
+
+---
+
+## Future Roadmap
+
+* **Multi-gateway Support:** Extend beyond Stripe to support PayPal, Braintree, etc.
+* **Advanced Analytics:** Dashboard with revenue projections and success rates.
+* **Customer Portal:** Frontend interface for customers to manage their installment plans.
+* **API Endpoints:** RESTful API for third-party integrations.
