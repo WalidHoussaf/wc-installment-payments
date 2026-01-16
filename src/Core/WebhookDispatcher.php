@@ -6,8 +6,17 @@ namespace WcInstallmentPayments\Core;
 
 class WebhookDispatcher {
 
-    private string $webhook_url = 'https://webhook.site/uuid-placeholder';
-    private string $secret_key  = 'sk_webhook_123456';
+    private string $webhook_url;
+    private string $secret_key;
+
+    public function __construct() {
+        $this->webhook_url = defined( 'WCIP_WEBHOOK_URL' )
+            ? WCIP_WEBHOOK_URL
+            : (string) get_option( 'wcip_webhook_url', '' );
+        $this->secret_key = defined( 'WCIP_WEBHOOK_SECRET' )
+            ? WCIP_WEBHOOK_SECRET
+            : (string) get_option( 'wcip_webhook_secret', '' );
+    }
 
     /**
      * Register the listener
@@ -22,6 +31,9 @@ class WebhookDispatcher {
      * @param int $plan_id
      */
     public function dispatch_failure_alert( int $payment_id, int $plan_id ): void {
+        if ( empty( $this->webhook_url ) || empty( $this->secret_key ) ) {
+            return;
+        }
         global $wpdb;
 
         $sql = "

@@ -13,7 +13,9 @@ class StripeService {
     private string $api_key;
 
     public function __construct() {
-        $this->api_key = 'sk_test_placeholder';
+        $this->api_key = defined( 'WCIP_STRIPE_API_KEY' )
+            ? WCIP_STRIPE_API_KEY
+            : (string) get_option( 'wcip_stripe_api_key', '' );
     }
 
     /**

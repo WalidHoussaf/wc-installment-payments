@@ -1,4 +1,4 @@
-# Testing Guide (Beginner-Friendly) — WC Installment Payments
+# Testing Guide — WC Installment Payments
 
 This guide explains **click by click** how to test the full plugin workflow:
 
@@ -144,8 +144,9 @@ So to test the scheduler immediately, you must **force a pending installment to 
 2. Click the **"Trigger Scheduler Now"** button
 3. Check the debug log for results
 
-**Method 2: Direct URL**
-Visit: `https://yoursite.com/trigger-scheduler.php`
+**Method 2: Direct URL (secure)**
+Go to **WooCommerce → Payment Plans** and use the **Direct URL** button.
+It includes a nonce so only logged-in admins can trigger it.
 
 **Method 3: WP-Cron (Original)**
 WP-Cron runs when WordPress receives traffic.

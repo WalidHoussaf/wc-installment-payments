@@ -62,6 +62,7 @@ class CheckoutHandler {
 
         $installments_count = 3;
         $frequency_days     = 30;
+        $base_timestamp     = current_time( 'timestamp' );
 
         global $wpdb;
         $wpdb->query( 'START TRANSACTION' );
@@ -81,7 +82,7 @@ class CheckoutHandler {
 
             foreach ( $schedule as $index => $amount ) {
                 $days_offset = $index * $frequency_days;
-                $due_date = date( 'Y-m-d H:i:s', strtotime( "+{$days_offset} days" ) );
+                $due_date = date( 'Y-m-d H:i:s', $base_timestamp + ( $days_offset * DAY_IN_SECONDS ) );
                 $status = ( $index === 0 ) ? 'paid' : 'pending';
 
                 $payment_id = $this->payment_manager->create_payment( $plan_id, (float) $amount, $due_date, $status );

@@ -170,9 +170,13 @@ Provides a granular view of a specific plan, including:
 
 1.  **Deploy:** Upload the `wc-installment-payments` directory to `wp-content/plugins/`.
 2.  **Activate:** Enable via WP Admin. Database migrations run automatically via `Activator::activate()`.
-3.  **Environment:**
-    The plugin currently expects the following to be configured (or mocked in `Plugin.php`):
-    * `STRIPE_API_KEY`
+3.  **Configure keys:** Go to **WooCommerce → Installment Settings** and set:
+    * **Stripe API key**
+    * **Webhook URL**
+    * **Webhook secret**
+    
+    Alternatively, you can define constants in `wp-config.php`:
+    * `WCIP_STRIPE_API_KEY`
     * `WCIP_WEBHOOK_URL`
     * `WCIP_WEBHOOK_SECRET`
 
@@ -192,6 +196,8 @@ To force the scheduler without waiting for WP-Cron (useful for local dev):
 ```bash
 wp cron event run wcip_hourly_process
 ```
+
+You can also use **WooCommerce → Payment Plans → Direct URL** (nonce-protected) to trigger the scheduler and redirect back to the list.
 
 ---
 
